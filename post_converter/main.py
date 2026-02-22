@@ -11,6 +11,9 @@ app = typer.Typer()
 def process(
     input_dir: Path = typer.Option(Path("./inputs"), "--input-dir", "-i", help="Directory with MD files"),
     processed_dir: Path = typer.Option(Path("./processed"), "--processed-dir", "-p", help="Output directory"),
+    recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Process markdown files recursively"),
+    keep_source: bool = typer.Option(True, "--keep-source/--move-source", help="Keep original markdown file in place"),
+    log_file: Optional[Path] = typer.Option(None, "--log-file", help="Optional log file with processed entries"),
 ):
     """
     Process all Markdown files in the input directory and URLs in urls.txt.
@@ -20,6 +23,8 @@ def process(
         raise typer.Exit(code=1)
         
     processed_dir.mkdir(parents=True, exist_ok=True)
+    if log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
     
     # Process urls.txt if exists
     urls_file = input_dir / "urls.txt"
@@ -32,15 +37,20 @@ def process(
                     continue
                 try:
                     process_url(url, processed_dir)
+                    append_log(log_file, f"OK URL {url}")
                 except Exception as e:
                     typer.echo(f"Failed to process {url}: {e}")
+                    append_log(log_file, f"ERROR URL {url} :: {e}")
     
     # Process MD files
-    for md_file in input_dir.glob("*.md"):
+    md_iter = input_dir.rglob("*.md") if recursive else input_dir.glob("*.md")
+    for md_file in md_iter:
         try:
-            process_file(md_file, processed_dir)
+            process_file(md_file, processed_dir, keep_source=keep_source)
+            append_log(log_file, f"OK FILE {md_file}")
         except Exception as e:
             typer.echo(f"Failed to process {md_file}: {e}")
+            append_log(log_file, f"ERROR FILE {md_file} :: {e}")
 
 def process_url(url: str, output_base: Path):
     blocks, metadata = parse_url(url)
@@ -58,7 +68,7 @@ def process_url(url: str, output_base: Path):
     # Save a reference file just in case? Or just log.
     typer.echo(f"Processed URL: {url} -> {project_dir}")
 
-def process_file(file_path: Path, output_base: Path):
+def process_file(file_path: Path, output_base: Path, keep_source: bool = True):
     blocks, metadata = parse_file(str(file_path))
     
     # Determine folder name
@@ -73,18 +83,25 @@ def process_file(file_path: Path, output_base: Path):
     write_python_script(blocks, metadata, str(project_dir / f"{safe_name}.py"))
     write_jupyter_notebook(blocks, metadata, str(project_dir / f"{safe_name}.ipynb"))
     
-    # Move source file
-    dest_file = project_dir / file_path.name
-    # Handle overwrite
-    if dest_file.exists():
-        dest_file.unlink()
-    file_path.rename(dest_file)
+    if not keep_source:
+        # Backward-compatible mode: move source file into processed folder.
+        dest_file = project_dir / file_path.name
+        if dest_file.exists():
+            dest_file.unlink()
+        file_path.rename(dest_file)
     
     typer.echo(f"Processed File: {file_path.name} -> {project_dir}")
 
 def sanitize_filename(name: str) -> str:
     name = name.lower().replace(' ', '-')
     return "".join([c for c in name if c.isalnum() or c in ('-', '_')]) or "output"
+
+
+def append_log(log_file: Optional[Path], line: str):
+    if not log_file:
+        return
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 
 if __name__ == "__main__":
